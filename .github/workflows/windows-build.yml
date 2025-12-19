@@ -3,7 +3,7 @@ name: Build Essentia Windows Wheels
 on:
   workflow_dispatch:
   push:
-    branches: [ main, cmake ]
+    branches: [cmake ]
   pull_request:
 
 jobs:
