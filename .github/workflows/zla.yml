@@ -1,125 +1,110 @@
-name: zla Essentia Python Wheel (Windows)
+name: Zla Build with CMake
 
-on:
-  workflow_dispatch:
+on: [push, pull_request]
+
+env:
+  # CMake build type (Debug, Release, RelWithDebInfo or MinSizeRel)
+  BUILD_TYPE: Release
 
 jobs:
-  build-wheel:
-    runs-on: windows-2022
-
-    strategy:
-      matrix:
-        python-version: ["3.9", "3.10", "3.11"]
+  ubuntu:
+    if: false
+    name: Ubuntu (build and test)
+    runs-on: ubuntu-latest
 
     steps:
-    # --------------------------------------------------
-    # Checkout
-    # --------------------------------------------------
-    - name: Checkout repository
-      uses: actions/checkout@v4
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          submodules: 'true'
 
-    # --------------------------------------------------
-    # Python
-    # --------------------------------------------------
-    - name: Setup Python
-      uses: actions/setup-python@v5
-      with:
-        python-version: ${{ matrix.python-version }}
-        architecture: x64
+      - name: Install dependencies
+        run: sudo apt-get install -y libeigen3-dev libyaml-dev libfftw3-dev libavcodec-dev libavformat-dev libavutil-dev libswresample-dev libsamplerate0-dev libtag1-dev libchromaprint-dev
+  
+      - name: Configure
+        run: cmake -B build
 
-    - name: Install Python tools
-      shell: pwsh
-      run: |
-        python -m pip install --upgrade pip setuptools wheel
+      - name: Build
+        run: cmake --build build --config ${{env.BUILD_TYPE}}
 
-    # --------------------------------------------------
-    # MSVC (C++)
-    # --------------------------------------------------
-    - name: Setup MSVC
-      uses: ilammy/msvc-dev-cmd@v1
+      - name: Test
+        run: ctest --test-dir build --output-on-failure -C ${{env.BUILD_TYPE}}
 
-    # --------------------------------------------------
-    # Configure CMake
-    # --------------------------------------------------
-    - name: Configure CMake
-      shell: pwsh
-      run: |
-        mkdir build
-        cd build
+  macos:
+    if: false
+    name: MacOS (build and test)
+    runs-on: macos-latest
 
-        cmake .. `
-          -G "Visual Studio 17 2022" `
-          -A x64 `
-          -DBUILD_PYTHON=ON `
-          -DBUILD_TESTS=OFF `
-          -DBUILD_EXAMPLES=OFF
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          submodules: 'true'
 
-    # --------------------------------------------------
-    # Build
-    # --------------------------------------------------
-    - name: Build Essentia
-      shell: pwsh
-      run: |
-        cd build
-        cmake --build . --config Release --parallel
+      - name: Install dependencies
+        run: brew install eigen libyaml fftw ffmpeg libsamplerate libtag chromaprint
+        
+      - name: Configure
+        run: cmake -B build
 
-    # --------------------------------------------------
-    # Create minimal Python package
-    # --------------------------------------------------
-    - name: Create Python package skeleton
-      shell: pwsh
-      run: |
-        mkdir -Force python\essentia
+      - name: Build
+        run: cmake --build build --config ${{env.BUILD_TYPE}}
 
-        Set-Content python\essentia\__init__.py "# Essentia Python bindings"
+      - name: Test
+        run: ctest --test-dir build --output-on-failure -C ${{env.BUILD_TYPE}}
 
-        @"
-from setuptools import setup
-from setuptools.dist import Distribution
+  windows:
+    name: Windows (build and test)
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: cmd
 
-class BinaryDistribution(Distribution):
-    def has_ext_modules(self):
-        return True
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          submodules: 'true'
 
-setup(
-    name="essentia",
-    version="0.0.0",
-    packages=["essentia"],
-    package_data={"essentia": ["*.pyd"]},
-    distclass=BinaryDistribution,
-)
-"@ | Set-Content python\setup.py
+      # We install Python manually, because actions/setup-python doesn't install the debug binaries.
+      # https://github.com/actions/setup-python/issues/86
+      # https://github.com/actions/runner-images/issues/786#issuecomment-620524456
 
-    # --------------------------------------------------
-    # Copy built .pyd
-    # --------------------------------------------------
-    - name: Copy Python extension
-      shell: pwsh
-      run: |
-        $pyd = Get-ChildItem -Recurse build -Filter "*.pyd" | Select-Object -First 1
+      # NOTE: PrependPath option doesn't seem to be reliable, so we add the path manually and pass Python3_ROOT_DIR to CMake.
 
-        if (-not $pyd) {
-          Write-Error "No .pyd file found"
-          exit 1
-        }
+      - name: Install Python
+        run: |
+          cd packaging
+          curl -L -o python-3.13.3-amd64.exe https://www.python.org/ftp/python/3.13.3/python-3.13.3-amd64.exe
+          Start-Process -FilePath python-3.13.3-amd64.exe -ArgumentList "/quiet Include_debug=1 Include_dev=1 Include_lib=1 Include_pip=1 PrependPath=1 CompileAll=1 InstallAllUsers=0" -Verb runas -Wait
+          Add-Content $env:GITHUB_PATH "C:\Users\runneradmin\AppData\Local\Programs\Python\Python313\Launcher"
+          Add-Content $env:GITHUB_PATH "C:\Users\runneradmin\AppData\Local\Programs\Python\Python313"
+          Add-Content $env:GITHUB_PATH "C:\Users\runneradmin\AppData\Local\Programs\Python\Python313\Scripts"
+        shell: pwsh
 
-        Copy-Item $pyd.FullName python\essentia\
+      - name: Install numpy
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install numpy
 
-    # --------------------------------------------------
-    # Build wheel
-    # --------------------------------------------------
-    - name: Build wheel
-      shell: pwsh
-      run: |
-        cd python
-        python setup.py bdist_wheel
+      - name: Install dependencies
+        run: .\packaging\build-dependencies-msvc.bat --static --build-type Release
+        
+      - name: Configure
+        run: cmake -B build -DUSE_TENSORFLOW=ON -DBUILD_PYTHON_BINDINGS=ON -DPython3_ROOT_DIR=C:\Users\runneradmin\AppData\Local\Programs\Python\Python313 -DENABLE_STATIC_DEPENDENCIES=ON -DCMAKE_PREFIX_PATH=%CD%\packaging\msvc
 
-    # --------------------------------------------------
-    # Upload wheel
-    # --------------------------------------------------
-    - name: Upload wheel
-      uses: actions/upload-artifact@v4
-      with:
-        name: essentia-win-${{ matrix.python-version }}
-        path: python/dist/*.whl
+      - name: Build
+        run: |
+          set PATH=%PATH%;%CD%\packaging\msvc\bin
+          cmake --build build --config ${{env.BUILD_TYPE}} --parallel
 
+      - name: Test
+        run: |
+          set PATH=%PATH%;%CD%\packaging\msvc\bin
+          ctest --test-dir build --output-on-failure -C ${{env.BUILD_TYPE}}
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: essentia-2.1b6.dev0-cp313-win64
+          path: build/wheel
