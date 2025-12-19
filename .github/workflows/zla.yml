@@ -1,4 +1,4 @@
-name: Build Essentia Python Wheel (Windows)
+name: zla Essentia Python Wheel (Windows)
 
 on:
   workflow_dispatch:
