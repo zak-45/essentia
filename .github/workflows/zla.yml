@@ -35,7 +35,7 @@ jobs:
       # ------------------------
       # Install Python (debug build!)
       # ------------------------
-      - name: Install Python ${{ matrix.python }}
+      - name: Setup Python ${{ matrix.python }}
         shell: pwsh
         run: |
           $ver = "${{ matrix.python }}"
@@ -72,6 +72,27 @@ jobs:
           .\packaging\build-dependencies-msvc.bat --static --build-type Release
 
       # ------------------------
+      # Install FFTW via vcpkg
+      # ------------------------
+      - name: Install FFTW
+        shell: pwsh
+        run: |
+          git clone https://github.com/microsoft/vcpkg.git
+          .\vcpkg\bootstrap-vcpkg.bat
+          .\vcpkg\vcpkg install fftw3:x64-windows eigen3:x64-windows
+
+      # ------------------------
+      # Download FFmpeg DLLs
+      # ------------------------
+      - name: Download FFmpeg
+        shell: pwsh
+        run: |
+          $ffmpegZip = "ffmpeg-release-essentials.zip"
+          Invoke-WebRequest -Uri "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip" -OutFile $ffmpegZip
+          Expand-Archive $ffmpegZip -DestinationPath ffmpeg
+          Get-ChildItem -Directory ffmpeg | ForEach-Object { Get-ChildItem $_.FullName | Move-Item -Destination ffmpeg -Force }
+
+      # ------------------------
       # Configure
       # ------------------------
       - name: Configure
@@ -81,7 +102,9 @@ jobs:
             -DBUILD_PYTHON_BINDINGS=ON ^
             -DPython3_ROOT_DIR=%PYTHON_ROOT% ^
             -DENABLE_STATIC_DEPENDENCIES=ON ^
-            -DCMAKE_PREFIX_PATH=%CD%\packaging\msvc
+            -DCMAKE_PREFIX_PATH=%CD%\packaging\msvc ^
+            -DFFTW_ROOT=%CD%\vcpkg\installed\x64-windows ^
+            -DEigen3_DIR=%CD%\vcpkg\installed\x64-windows/share/eigen3/cmake
 
       # ------------------------
       # Build
@@ -100,6 +123,59 @@ jobs:
           ctest --test-dir build --output-on-failure -C %BUILD_TYPE%
 
       # ------------------------
+      # Prepare Python package
+      # ------------------------
+      - name: Prepare Python package
+        shell: pwsh
+        run: |
+          mkdir -Force src\python\essentia
+          Set-Content src\python\essentia\__init__.py "# Essentia Python bindings"
+
+          $lines = @(
+              "from setuptools import setup",
+              "from setuptools.dist import Distribution",
+              "",
+              "class BinaryDistribution(Distribution):",
+              "    def has_ext_modules(self):",
+              "        return True",
+              "",
+              "setup(",
+              "    name='essentia',",
+              "    version='2.1b6.dev0',",
+              "    packages=['essentia'],",
+              "    package_data={'essentia': ['*.pyd','*.dll']},",
+              "    distclass=BinaryDistribution,",
+              ")"
+          )
+          $lines | Set-Content src\python\setup.py
+
+      # ------------------------
+      # Copy .pyd + DLLs
+      # ------------------------
+      - name: Copy Python extension and DLLs
+        shell: pwsh
+        run: |
+          $pyd = Get-ChildItem -Recurse build -Filter "*.pyd" | Select-Object -First 1
+          if (-not $pyd) { Write-Error "No .pyd found"; exit 1 }
+          Copy-Item $pyd.FullName src\python\essentia\
+
+          Copy-Item vcpkg\installed\x64-windows\bin\*.dll src\python\essentia\
+          Copy-Item ffmpeg\bin\*.dll src\python\essentia\
+
+      # ------------------------
+      # Patch DLL loading
+      # ------------------------
+      - name: Patch DLL loading
+        shell: pwsh
+        run: |
+          $init = "src\python\essentia\__init__.py"
+          Add-Content $init ""
+          Add-Content $init "import os, sys"
+          Add-Content $init "from pathlib import Path"
+          Add-Content $init "if sys.platform == 'win32':"
+          Add-Content $init "    os.add_dll_directory(str(Path(__file__).parent))"
+
+      # ------------------------
       # Build Python wheel
       # ------------------------
       - name: Build wheel
@@ -116,4 +192,4 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: essentia-win-cp${{ matrix.python }}
-          path: src/python/dist/*.whl
+          path: src\python\dist/*.whl
