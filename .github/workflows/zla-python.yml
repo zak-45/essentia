@@ -71,10 +71,12 @@ jobs:
         mkdir build
         cd build
         $fftw = Resolve-Path "..\vcpkg\installed\x64-windows"
+        $pythonExe = (Get-Command python).Source
         cmake .. `
           -G "Visual Studio 17 2022" `
           -A x64 `
           -DBUILD_PYTHON=ON `
+          -DPYTHON_EXECUTABLE="$pythonExe" `
           -DBUILD_TESTS=OFF `
           -DBUILD_EXAMPLES=OFF `
           -DFFTW_ROOT="$fftw"
@@ -88,7 +90,33 @@ jobs:
         cd build
         cmake --build . --config Release --parallel
 
+    # ------------------------
+    # Create minimal Python package (line-by-line)
+    # ------------------------
+    - name: Create minimal Python package
+      shell: pwsh
+      run: |
+        mkdir -Force python\essentia
+        Set-Content python\essentia\__init__.py "# Essentia Python bindings"
 
+        $lines = @(
+            "from setuptools import setup",
+            "from setuptools.dist import Distribution",
+            "",
+            "class BinaryDistribution(Distribution):",
+            "    def has_ext_modules(self):",
+            "        return True",
+            "",
+            "setup(",
+            "    name='essentia',",
+            "    version='2.1b6.dev0',",
+            "    packages=['essentia'],",
+            "    package_data={'essentia': ['*.pyd','*.dll']},",
+            "    distclass=BinaryDistribution,",
+            ")"
+        )
+
+        $lines | Set-Content python\setup.py
 
     # ------------------------
     # Copy Python extension + FFTW + FFmpeg DLLs
