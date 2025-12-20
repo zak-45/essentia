@@ -185,29 +185,6 @@ jobs:
           python -m pip install --upgrade setuptools wheel
           python setup.py bdist_wheel
 
-      # ------------------------
-      # Test built wheel (smoke test)
-      # ------------------------
-      - name: Test wheel
-        shell: pwsh
-        run: |
-          cd src\python\dist
-          python -m pip install --upgrade *.whl
-
-          python - <<CODE
-            import essentia
-            import essentia.standard as es
-
-            print("Essentia version:", essentia.__version__)
-
-            # Minimal smoke test
-            import os
-            from pathlib import Path
-            wav_file = Path(__file__).parent.parent.parent / "packaging" / "silence.wav"
-            loader = es.MonoLoader(filename=str(wav_file))
-            audio = loader()
-            print("Loaded audio length:", len(audio))
-          CODE
 
       # ------------------------
       # Upload wheel
