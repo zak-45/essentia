@@ -88,31 +88,6 @@ jobs:
         cd build
         cmake --build . --config Release --parallel
 
-    # ------------------------
-    # Create minimal Python package
-    # ------------------------
-    - name: Create minimal Python package
-      shell: pwsh
-      run: |
-        mkdir -Force python\essentia
-        Set-Content python\essentia\__init__.py "# Essentia Python bindings"
-
-        @"
-from setuptools import setup
-from setuptools.dist import Distribution
-
-class BinaryDistribution(Distribution):
-    def has_ext_modules(self):
-        return True
-
-setup(
-    name='essentia',
-    version='2.1b6.dev0',
-    packages=['essentia'],
-    package_data={'essentia': ['*.pyd', '*.dll']},
-    distclass=BinaryDistribution,
-)
-"@ | Set-Content python\setup.py
 
     # ------------------------
     # Copy Python extension + FFTW + FFmpeg DLLs
