@@ -1,4 +1,4 @@
-name: Zla Build Essentia Windows Python Wheels
+name: Build Essentia Windows Python Wheels
 
 on:
   workflow_dispatch:
@@ -101,4 +101,62 @@ jobs:
 from setuptools import setup
 from setuptools.dist import Distribution
 
-class BinaryDistribut
+class BinaryDistribution(Distribution):
+    def has_ext_modules(self):
+        return True
+
+setup(
+    name="essentia",
+    version="2.1b6.dev0",
+    packages=["essentia"],
+    package_data={"essentia": ["*.pyd", "*.dll"]},
+    distclass=BinaryDistribution,
+)
+'@ | Set-Content python\setup.py
+
+    # ------------------------
+    # Copy Python extension + FFTW + FFmpeg DLLs
+    # ------------------------
+    - name: Copy Python extension and DLLs
+      shell: pwsh
+      run: |
+        $pyd = Get-ChildItem -Recurse build -Filter "*.pyd" | Select-Object -First 1
+        if (-not $pyd) { Write-Error "No .pyd found"; exit 1 }
+        Copy-Item $pyd.FullName python\essentia\
+
+        # Copy FFTW DLLs
+        Copy-Item vcpkg\installed\x64-windows\bin\*.dll python\essentia\
+
+        # Copy FFmpeg DLLs
+        Copy-Item ffmpeg\bin\*.dll python\essentia\
+
+    # ------------------------
+    # Patch __init__.py to load DLLs
+    # ------------------------
+    - name: Patch DLL loading
+      shell: pwsh
+      run: |
+        $init = "python\essentia\__init__.py"
+        Add-Content $init ""
+        Add-Content $init "import os, sys"
+        Add-Content $init "from pathlib import Path"
+        Add-Content $init "if sys.platform == 'win32':"
+        Add-Content $init "    os.add_dll_directory(str(Path(__file__).parent))"
+
+    # ------------------------
+    # Build wheel
+    # ------------------------
+    - name: Build wheel
+      shell: pwsh
+      run: |
+        cd python
+        python setup.py bdist_wheel
+
+    # ------------------------
+    # Upload artifact
+    # ------------------------
+    - name: Upload wheels
+      uses: actions/upload-artifact@v4
+      with:
+        name: essentia-win-py${{ matrix.python-version }}
+        path: python/dist/*.whl
