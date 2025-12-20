@@ -1,0 +1,162 @@
+name: Zla Build Essentia Windows Python Wheels
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-wheels:
+    runs-on: windows-2022
+
+    strategy:
+      matrix:
+        python-version: ["3.9", "3.10", "3.11", "3.12", "3.13"]
+
+    steps:
+    # ------------------------
+    # Checkout repo
+    # ------------------------
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      with:
+        submodules: recursive
+
+    # ------------------------
+    # Setup Python
+    # ------------------------
+    - name: Setup Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ matrix.python-version }}
+        architecture: x64
+
+    - name: Upgrade pip and tools
+      shell: pwsh
+      run: |
+        python -m pip install --upgrade pip setuptools wheel numpy
+
+    # ------------------------
+    # Setup MSVC
+    # ------------------------
+    - name: Setup MSVC
+      uses: ilammy/msvc-dev-cmd@v1
+
+    # ------------------------
+    # Install FFTW via vcpkg
+    # ------------------------
+    - name: Install FFTW
+      shell: pwsh
+      run: |
+        git clone https://github.com/microsoft/vcpkg.git
+        .\vcpkg\bootstrap-vcpkg.bat
+        .\vcpkg\vcpkg install fftw3:x64-windows
+
+    # ------------------------
+    # Download FFmpeg DLLs
+    # ------------------------
+    - name: Download FFmpeg
+      shell: pwsh
+      run: |
+        $ffmpegZip = "ffmpeg-release-essentials.zip"
+        Invoke-WebRequest -Uri "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip" -OutFile $ffmpegZip
+        Expand-Archive $ffmpegZip -DestinationPath ffmpeg
+        # move inner folder contents to ffmpeg root
+        Get-ChildItem -Directory ffmpeg | ForEach-Object { Get-ChildItem $_.FullName | Move-Item -Destination ffmpeg -Force }
+
+    # ------------------------
+    # Configure CMake
+    # ------------------------
+    - name: Configure CMake
+      shell: pwsh
+      run: |
+        mkdir build
+        cd build
+        $fftw = Resolve-Path "..\vcpkg\installed\x64-windows"
+        cmake .. `
+          -G "Visual Studio 17 2022" `
+          -A x64 `
+          -DBUILD_PYTHON=ON `
+          -DBUILD_TESTS=OFF `
+          -DBUILD_EXAMPLES=OFF `
+          -DFFTW_ROOT="$fftw"
+
+    # ------------------------
+    # Build
+    # ------------------------
+    - name: Build Essentia
+      shell: pwsh
+      run: |
+        cd build
+        cmake --build . --config Release --parallel
+
+    # ------------------------
+    # Create minimal Python package
+    # ------------------------
+    - name: Create minimal Python package
+      shell: pwsh
+      run: |
+        mkdir -Force python\essentia
+        Set-Content python\essentia\__init__.py "# Essentia Python bindings"
+
+        @"
+from setuptools import setup
+from setuptools.dist import Distribution
+
+class BinaryDistribution(Distribution):
+    def has_ext_modules(self):
+        return True
+
+setup(
+    name='essentia',
+    version='2.1b6.dev0',
+    packages=['essentia'],
+    package_data={'essentia': ['*.pyd', '*.dll']},
+    distclass=BinaryDistribution,
+)
+"@ | Set-Content python\setup.py
+
+    # ------------------------
+    # Copy Python extension + FFTW + FFmpeg DLLs
+    # ------------------------
+    - name: Copy Python extension and DLLs
+      shell: pwsh
+      run: |
+        $pyd = Get-ChildItem -Recurse build -Filter "*.pyd" | Select-Object -First 1
+        if (-not $pyd) { Write-Error "No .pyd found"; exit 1 }
+        Copy-Item $pyd.FullName python\essentia\
+
+        # Copy FFTW DLLs
+        Copy-Item vcpkg\installed\x64-windows\bin\*.dll python\essentia\
+
+        # Copy FFmpeg DLLs
+        Copy-Item ffmpeg\bin\*.dll python\essentia\
+
+    # ------------------------
+    # Patch __init__.py to load DLLs
+    # ------------------------
+    - name: Patch DLL loading
+      shell: pwsh
+      run: |
+        $init = "python\essentia\__init__.py"
+        Add-Content $init ""
+        Add-Content $init "import os, sys"
+        Add-Content $init "from pathlib import Path"
+        Add-Content $init "if sys.platform == 'win32':"
+        Add-Content $init "    os.add_dll_directory(str(Path(__file__).parent))"
+
+    # ------------------------
+    # Build wheel
+    # ------------------------
+    - name: Build wheel
+      shell: pwsh
+      run: |
+        cd python
+        python setup.py bdist_wheel
+
+    # ------------------------
+    # Upload artifact
+    # ------------------------
+    - name: Upload wheels
+      uses: actions/upload-artifact@v4
+      with:
+        name: essentia-win-py${{ matrix.python-version }}
+        path: python/dist/*.whl
