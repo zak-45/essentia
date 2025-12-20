@@ -1,4 +1,4 @@
-name: Multi Python Win essentia wheels Build with CMake
+name: Multi Python Win Essentia Wheels Build with CMake
 
 on:
   workflow_dispatch:
@@ -33,7 +33,7 @@ jobs:
           submodules: 'true'
 
       # ------------------------
-      # Install Python (debug build!)
+      # Setup Python
       # ------------------------
       - name: Setup Python ${{ matrix.python }}
         shell: pwsh
@@ -65,16 +65,16 @@ jobs:
           python -m pip install numpy
 
       # ------------------------
-      # Install Essentia deps (official)
+      # Install Essentia dependencies
       # ------------------------
       - name: Install dependencies
         run: |
           .\packaging\build-dependencies-msvc.bat --static --build-type Release
 
       # ------------------------
-      # Install FFTW via vcpkg
+      # Install FFTW + Eigen via vcpkg
       # ------------------------
-      - name: Install FFTW & Eigen
+      - name: Install FFTW and Eigen
         shell: pwsh
         run: |
           git clone https://github.com/microsoft/vcpkg.git
@@ -93,7 +93,7 @@ jobs:
           Get-ChildItem -Directory ffmpeg | ForEach-Object { Get-ChildItem $_.FullName | Move-Item -Destination ffmpeg -Force }
 
       # ------------------------
-      # Configure
+      # Configure CMake
       # ------------------------
       - name: Configure
         run: |
@@ -150,7 +150,7 @@ jobs:
           $lines | Set-Content src\python\setup.py
 
       # ------------------------
-      # Copy .pyd + all DLLs
+      # Copy .pyd + DLLs
       # ------------------------
       - name: Copy Python extension and DLLs
         shell: pwsh
@@ -159,14 +159,8 @@ jobs:
           if (-not $pyd) { Write-Error "No .pyd found"; exit 1 }
           Copy-Item $pyd.FullName src\python\essentia\
 
-          # Copy FFTW DLLs
           Copy-Item vcpkg\installed\x64-windows\bin\*.dll src\python\essentia\
-
-          # Copy FFmpeg DLLs
           Copy-Item ffmpeg\bin\*.dll src\python\essentia\
-
-          # Copy packaging/msvc DLLs (TensorFlow etc.)
-          Copy-Item packaging\msvc\bin\*.dll src\python\essentia\
 
       # ------------------------
       # Patch DLL loading
@@ -190,6 +184,30 @@ jobs:
           cd src\python
           python -m pip install --upgrade setuptools wheel
           python setup.py bdist_wheel
+
+      # ------------------------
+      # Test built wheel (smoke test)
+      # ------------------------
+      - name: Test wheel
+        shell: pwsh
+        run: |
+          cd src\python\dist
+          python -m pip install --upgrade *.whl
+
+          python - <<CODE
+import essentia
+import essentia.standard as es
+
+print("Essentia version:", essentia.__version__)
+
+# Minimal smoke test
+import os
+from pathlib import Path
+wav_file = Path(__file__).parent.parent.parent / "packaging" / "silence.wav"
+loader = es.MonoLoader(filename=str(wav_file))
+audio = loader()
+print("Loaded audio length:", len(audio))
+CODE
 
       # ------------------------
       # Upload wheel
