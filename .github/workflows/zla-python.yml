@@ -41,14 +41,14 @@ jobs:
       uses: ilammy/msvc-dev-cmd@v1
 
     # ------------------------
-    # Install FFTW via vcpkg
+    # Install FFTW + Eigen3 via vcpkg  ✅ FIX
     # ------------------------
-    - name: Install FFTW
+    - name: Install dependencies with vcpkg
       shell: pwsh
       run: |
         git clone https://github.com/microsoft/vcpkg.git
         .\vcpkg\bootstrap-vcpkg.bat
-        .\vcpkg\vcpkg install fftw3:x64-windows
+        .\vcpkg\vcpkg install fftw3:x64-windows eigen3:x64-windows
 
     # ------------------------
     # Download FFmpeg DLLs
@@ -56,30 +56,35 @@ jobs:
     - name: Download FFmpeg
       shell: pwsh
       run: |
-        $ffmpegZip = "ffmpeg-release-essentials.zip"
-        Invoke-WebRequest -Uri "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip" -OutFile $ffmpegZip
-        Expand-Archive $ffmpegZip -DestinationPath ffmpeg
-        # move inner folder contents to ffmpeg root
-        Get-ChildItem -Directory ffmpeg | ForEach-Object { Get-ChildItem $_.FullName | Move-Item -Destination ffmpeg -Force }
+        $zip = "ffmpeg-release-essentials.zip"
+        Invoke-WebRequest `
+          -Uri "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip" `
+          -OutFile $zip
+        Expand-Archive $zip -DestinationPath ffmpeg
+        Get-ChildItem -Directory ffmpeg | ForEach-Object {
+          Get-ChildItem $_.FullName | Move-Item -Destination ffmpeg -Force
+        }
 
     # ------------------------
-    # Configure CMake
+    # Configure CMake  ✅ FIX
     # ------------------------
     - name: Configure CMake
       shell: pwsh
       run: |
         mkdir build
         cd build
-        $fftw = Resolve-Path "..\vcpkg\installed\x64-windows"
+
         $pythonExe = (Get-Command python).Source
+        $toolchain = Resolve-Path ..\vcpkg\scripts\buildsystems\vcpkg.cmake
+
         cmake .. `
           -G "Visual Studio 17 2022" `
           -A x64 `
+          -DCMAKE_TOOLCHAIN_FILE="$toolchain" `
           -DBUILD_PYTHON=ON `
           -DPYTHON_EXECUTABLE="$pythonExe" `
           -DBUILD_TESTS=OFF `
-          -DBUILD_EXAMPLES=OFF `
-          -DFFTW_ROOT="$fftw"
+          -DBUILD_EXAMPLES=OFF
 
     # ------------------------
     # Build
@@ -91,7 +96,7 @@ jobs:
         cmake --build . --config Release --parallel
 
     # ------------------------
-    # Create minimal Python package (line-by-line)
+    # Create minimal Python package
     # ------------------------
     - name: Create minimal Python package
       shell: pwsh
@@ -100,26 +105,26 @@ jobs:
         Set-Content python\essentia\__init__.py "# Essentia Python bindings"
 
         $lines = @(
-            "from setuptools import setup",
-            "from setuptools.dist import Distribution",
-            "",
-            "class BinaryDistribution(Distribution):",
-            "    def has_ext_modules(self):",
-            "        return True",
-            "",
-            "setup(",
-            "    name='essentia',",
-            "    version='2.1b6.dev0',",
-            "    packages=['essentia'],",
-            "    package_data={'essentia': ['*.pyd','*.dll']},",
-            "    distclass=BinaryDistribution,",
-            ")"
+          "from setuptools import setup",
+          "from setuptools.dist import Distribution",
+          "",
+          "class BinaryDistribution(Distribution):",
+          "    def has_ext_modules(self):",
+          "        return True",
+          "",
+          "setup(",
+          "    name='essentia',",
+          "    version='2.1b6.dev0',",
+          "    packages=['essentia'],",
+          "    package_data={'essentia': ['*.pyd','*.dll']},",
+          "    distclass=BinaryDistribution,",
+          ")"
         )
 
         $lines | Set-Content python\setup.py
 
     # ------------------------
-    # Copy Python extension + FFTW + FFmpeg DLLs
+    # Copy Python extension + DLLs
     # ------------------------
     - name: Copy Python extension and DLLs
       shell: pwsh
@@ -128,14 +133,11 @@ jobs:
         if (-not $pyd) { Write-Error "No .pyd found"; exit 1 }
         Copy-Item $pyd.FullName python\essentia\
 
-        # Copy FFTW DLLs
         Copy-Item vcpkg\installed\x64-windows\bin\*.dll python\essentia\
-
-        # Copy FFmpeg DLLs
         Copy-Item ffmpeg\bin\*.dll python\essentia\
 
     # ------------------------
-    # Patch __init__.py to load DLLs
+    # Patch __init__.py
     # ------------------------
     - name: Patch DLL loading
       shell: pwsh
