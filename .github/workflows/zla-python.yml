@@ -88,50 +88,17 @@ jobs:
         cd build
         cmake --build . --config Release --parallel
 
-
     # ------------------------
-    # Copy Python extension + FFTW + FFmpeg DLLs
+    # Create minimal Python package
     # ------------------------
-    - name: Copy Python extension and DLLs
+    - name: Create minimal Python package
       shell: pwsh
       run: |
-        $pyd = Get-ChildItem -Recurse build -Filter "*.pyd" | Select-Object -First 1
-        if (-not $pyd) { Write-Error "No .pyd found"; exit 1 }
-        Copy-Item $pyd.FullName python\essentia\
+        mkdir -Force python\essentia
+        Set-Content python\essentia\__init__.py "# Essentia Python bindings"
 
-        # Copy FFTW DLLs
-        Copy-Item vcpkg\installed\x64-windows\bin\*.dll python\essentia\
+        @'
+from setuptools import setup
+from setuptools.dist import Distribution
 
-        # Copy FFmpeg DLLs
-        Copy-Item ffmpeg\bin\*.dll python\essentia\
-
-    # ------------------------
-    # Patch __init__.py to load DLLs
-    # ------------------------
-    - name: Patch DLL loading
-      shell: pwsh
-      run: |
-        $init = "python\essentia\__init__.py"
-        Add-Content $init ""
-        Add-Content $init "import os, sys"
-        Add-Content $init "from pathlib import Path"
-        Add-Content $init "if sys.platform == 'win32':"
-        Add-Content $init "    os.add_dll_directory(str(Path(__file__).parent))"
-
-    # ------------------------
-    # Build wheel
-    # ------------------------
-    - name: Build wheel
-      shell: pwsh
-      run: |
-        cd python
-        python setup.py bdist_wheel
-
-    # ------------------------
-    # Upload artifact
-    # ------------------------
-    - name: Upload wheels
-      uses: actions/upload-artifact@v4
-      with:
-        name: essentia-win-py${{ matrix.python-version }}
-        path: python/dist/*.whl
+class BinaryDistribut
