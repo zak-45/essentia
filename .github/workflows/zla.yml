@@ -1,4 +1,4 @@
-name: Zla Build with CMake
+name: Cross Platform essentia wheels Build with CMake
 
 on:
   workflow_dispatch:
