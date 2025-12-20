@@ -1,4 +1,4 @@
-name: Cross Platform essentia wheels Build with CMake
+name: Multi Python Win essentia wheels Build with CMake
 
 on:
   workflow_dispatch:
