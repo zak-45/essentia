@@ -4,108 +4,118 @@ on:
   workflow_dispatch:
 
 env:
-  # CMake build type (Debug, Release, RelWithDebInfo or MinSizeRel)
   BUILD_TYPE: Release
 
 jobs:
-  ubuntu:
-    if: false
-    name: Ubuntu (build and test)
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          submodules: 'true'
-
-      - name: Install dependencies
-        run: sudo apt-get install -y libeigen3-dev libyaml-dev libfftw3-dev libavcodec-dev libavformat-dev libavutil-dev libswresample-dev libsamplerate0-dev libtag1-dev libchromaprint-dev
-  
-      - name: Configure
-        run: cmake -B build
-
-      - name: Build
-        run: cmake --build build --config ${{env.BUILD_TYPE}}
-
-      - name: Test
-        run: ctest --test-dir build --output-on-failure -C ${{env.BUILD_TYPE}}
-
-  macos:
-    if: false
-    name: MacOS (build and test)
-    runs-on: macos-latest
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          submodules: 'true'
-
-      - name: Install dependencies
-        run: brew install eigen libyaml fftw ffmpeg libsamplerate libtag chromaprint
-        
-      - name: Configure
-        run: cmake -B build
-
-      - name: Build
-        run: cmake --build build --config ${{env.BUILD_TYPE}}
-
-      - name: Test
-        run: ctest --test-dir build --output-on-failure -C ${{env.BUILD_TYPE}}
-
   windows:
-    name: Windows (build and test)
+    name: Windows Python ${{ matrix.python }}
     runs-on: windows-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        python:
+          - "3.9.19"
+          - "3.10.14"
+          - "3.11.9"
+          - "3.12.3"
+          - "3.13.3"
+
     defaults:
       run:
         shell: cmd
 
     steps:
+      # ------------------------
+      # Checkout
+      # ------------------------
       - name: Checkout code
         uses: actions/checkout@v4
         with:
           submodules: 'true'
 
-      # We install Python manually, because actions/setup-python doesn't install the debug binaries.
-      # https://github.com/actions/setup-python/issues/86
-      # https://github.com/actions/runner-images/issues/786#issuecomment-620524456
-
-      # NOTE: PrependPath option doesn't seem to be reliable, so we add the path manually and pass Python3_ROOT_DIR to CMake.
-
-      - name: Install Python
-        run: |
-          cd packaging
-          curl -L -o python-3.13.3-amd64.exe https://www.python.org/ftp/python/3.13.3/python-3.13.3-amd64.exe
-          Start-Process -FilePath python-3.13.3-amd64.exe -ArgumentList "/quiet Include_debug=1 Include_dev=1 Include_lib=1 Include_pip=1 PrependPath=1 CompileAll=1 InstallAllUsers=0" -Verb runas -Wait
-          Add-Content $env:GITHUB_PATH "C:\Users\runneradmin\AppData\Local\Programs\Python\Python313\Launcher"
-          Add-Content $env:GITHUB_PATH "C:\Users\runneradmin\AppData\Local\Programs\Python\Python313"
-          Add-Content $env:GITHUB_PATH "C:\Users\runneradmin\AppData\Local\Programs\Python\Python313\Scripts"
+      # ------------------------
+      # Install Python (debug build!)
+      # ------------------------
+      - name: Install Python ${{ matrix.python }}
         shell: pwsh
+        run: |
+          $ver = "${{ matrix.python }}"
+          $short = ($ver -split '\.')[0..1] -join ''
+          $exe = "python-$ver-amd64.exe"
 
+          curl -L -o $exe https://www.python.org/ftp/python/$ver/$exe
+
+          Start-Process -FilePath .\$exe `
+            -ArgumentList "/quiet Include_debug=1 Include_dev=1 Include_lib=1 Include_pip=1 PrependPath=0 InstallAllUsers=0" `
+            -Wait
+
+          $root = "C:\Users\runneradmin\AppData\Local\Programs\Python\Python$short"
+
+          Add-Content $env:GITHUB_PATH "$root"
+          Add-Content $env:GITHUB_PATH "$root\Scripts"
+
+          echo "PYTHON_ROOT=$root" >> $env:GITHUB_ENV
+
+      # ------------------------
+      # Install numpy
+      # ------------------------
       - name: Install numpy
+        shell: pwsh
         run: |
           python -m pip install --upgrade pip
           python -m pip install numpy
 
+      # ------------------------
+      # Install Essentia deps (official)
+      # ------------------------
       - name: Install dependencies
-        run: .\packaging\build-dependencies-msvc.bat --static --build-type Release
-        
-      - name: Configure
-        run: cmake -B build -DUSE_TENSORFLOW=ON -DBUILD_PYTHON_BINDINGS=ON -DPython3_ROOT_DIR=C:\Users\runneradmin\AppData\Local\Programs\Python\Python313 -DENABLE_STATIC_DEPENDENCIES=ON -DCMAKE_PREFIX_PATH=%CD%\packaging\msvc
+        run: |
+          .\packaging\build-dependencies-msvc.bat --static --build-type Release
 
+      # ------------------------
+      # Configure
+      # ------------------------
+      - name: Configure
+        run: |
+          cmake -B build ^
+            -DUSE_TENSORFLOW=ON ^
+            -DBUILD_PYTHON_BINDINGS=ON ^
+            -DPython3_ROOT_DIR=%PYTHON_ROOT% ^
+            -DENABLE_STATIC_DEPENDENCIES=ON ^
+            -DCMAKE_PREFIX_PATH=%CD%\packaging\msvc
+
+      # ------------------------
+      # Build
+      # ------------------------
       - name: Build
         run: |
           set PATH=%PATH%;%CD%\packaging\msvc\bin
-          cmake --build build --config ${{env.BUILD_TYPE}} --parallel
+          cmake --build build --config %BUILD_TYPE% --parallel
 
+      # ------------------------
+      # Test
+      # ------------------------
       - name: Test
         run: |
           set PATH=%PATH%;%CD%\packaging\msvc\bin
-          ctest --test-dir build --output-on-failure -C ${{env.BUILD_TYPE}}
+          ctest --test-dir build --output-on-failure -C %BUILD_TYPE%
 
-      - name: Upload artifact
+      # ------------------------
+      # Build Python wheel
+      # ------------------------
+      - name: Build wheel
+        shell: pwsh
+        run: |
+          cd src\python
+          python -m pip install --upgrade setuptools wheel
+          python setup.py bdist_wheel
+
+      # ------------------------
+      # Upload wheel
+      # ------------------------
+      - name: Upload wheel
         uses: actions/upload-artifact@v4
         with:
-          name: essentia-2.1b6.dev0-cp313-win64
-          path: build/wheel
+          name: essentia-win-cp${{ matrix.python }}
+          path: src/python/dist/*.whl
