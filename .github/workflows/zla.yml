@@ -122,17 +122,28 @@ jobs:
           set PATH=%PATH%;%CD%\packaging\msvc\bin
           ctest --test-dir build --output-on-failure -C %BUILD_TYPE%
 
+
       # ------------------------
-      # Prepare Python package
+      # Prepare Python package (FIXED)
       # ------------------------
       - name: Prepare Python package
         shell: pwsh
         run: |
-          mkdir -Force src\python\essentia
-          Set-Content src\python\essentia\__init__.py "# Essentia Python bindings"
-
+          # Ensure python package root exists
+          if (-not (Test-Path src\python)) {
+            Write-Error "src/python not found"
+            exit 1
+          }
+      
+          # Verify essentia python sources exist
+          if (-not (Test-Path src\python\essentia\standard.py)) {
+            Write-Error "Essentia Python sources missing"
+            exit 1
+          }
+      
+          # setup.py (binary wheel)
           $lines = @(
-              "from setuptools import setup",
+              "from setuptools import setup, find_packages",
               "from setuptools.dist import Distribution",
               "",
               "class BinaryDistribution(Distribution):",
@@ -142,13 +153,14 @@ jobs:
               "setup(",
               "    name='essentia',",
               "    version='2.1b6.dev0',",
-              "    packages=['essentia'],",
+              "    packages=find_packages(),",
               "    package_data={'essentia': ['*.pyd','*.dll']},",
+              "    include_package_data=True,",
               "    distclass=BinaryDistribution,",
               ")"
           )
           $lines | Set-Content src\python\setup.py
-
+        
       # ------------------------
       # Copy .pyd + DLLs (including all build/bin DLLs)
       # ------------------------
