@@ -182,19 +182,23 @@ jobs:
 
           # Copy all DLLs from CMake build/bin/Release (required for log and algorithms)
           Copy-Item build\bin\Release\*.dll src\python\essentia\
-          
+
+
       # ------------------------
-      # Patch DLL loading
+      # Patch DLL loading (SAFE)
       # ------------------------
       - name: Patch DLL loading
         shell: pwsh
         run: |
           $init = "src\python\essentia\__init__.py"
-          Add-Content $init ""
-          Add-Content $init "import os, sys"
-          Add-Content $init "from pathlib import Path"
-          Add-Content $init "if sys.platform == 'win32':"
-          Add-Content $init "    os.add_dll_directory(str(Path(__file__).parent))"
+      
+          if (-not (Select-String -Path $init -Pattern "add_dll_directory" -Quiet)) {
+            Add-Content $init ""
+            Add-Content $init "import os, sys"
+            Add-Content $init "from pathlib import Path"
+            Add-Content $init "if sys.platform == 'win32':"
+            Add-Content $init "    os.add_dll_directory(str(Path(__file__).parent))"
+          }
 
       # ------------------------
       # Build Python wheel
