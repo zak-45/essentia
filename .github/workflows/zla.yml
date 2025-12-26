@@ -180,9 +180,6 @@ jobs:
           # Copy packaging/msvc DLLs (TensorFlow etc.)
           Copy-Item packaging\msvc\bin\*.dll src\python\essentia\
 
-          # Copy all DLLs from CMake build/bin/Release (required for log and algorithms)
-          Copy-Item build\bin\Release\*.dll src\python\essentia\
-
       # ------------------------
       # Copy Python extension and DLLs
       # ------------------------
