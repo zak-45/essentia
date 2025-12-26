@@ -183,6 +183,23 @@ jobs:
           # Copy all DLLs from CMake build/bin/Release (required for log and algorithms)
           Copy-Item build\bin\Release\*.dll src\python\essentia\
 
+      # ------------------------
+      # Copy Python extension and DLLs
+      # ------------------------
+      - name: Copy Python extension and DLLs
+        shell: pwsh
+        run: |
+          $pkg = "src\python\essentia"
+      
+          $pyd = Get-ChildItem -Recurse build -Filter "*_essentia*.pyd" | Select-Object -First 1
+          if (-not $pyd) { Write-Error "No _essentia.pyd found"; exit 1 }
+      
+          Copy-Item $pyd.FullName $pkg -Force
+      
+          Copy-Item packaging\msvc\bin\*.dll $pkg -Force
+          Copy-Item vcpkg\installed\x64-windows\bin\*.dll $pkg -Force
+          Copy-Item ffmpeg\bin\*.dll $pkg -Force
+
 
       # ------------------------
       # Patch DLL loading (SAFE)
