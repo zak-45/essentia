@@ -1,0 +1,256 @@
+name: Multi Python Win Essentia Wheels Build with CMake
+
+on:
+  workflow_dispatch:
+
+env:
+  BUILD_TYPE: Release
+
+jobs:
+  windows:
+    name: Windows Python ${{ matrix.python }}
+    runs-on: windows-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        python:
+          - "3.11.9"
+          - "3.12.3"
+          - "3.13.3"
+
+    defaults:
+      run:
+        shell: cmd
+
+    steps:
+      # ------------------------
+      # Checkout
+      # ------------------------
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          submodules: 'true'
+
+      # ------------------------
+      # Setup Python
+      # ------------------------
+      - name: Setup Python ${{ matrix.python }}
+        shell: pwsh
+        run: |
+          $ver = "${{ matrix.python }}"
+          $short = ($ver -split '\.')[0..1] -join ''
+          $exe = "python-$ver-amd64.exe"
+
+          curl -L -o $exe https://www.python.org/ftp/python/$ver/$exe
+
+          Start-Process -FilePath .\$exe `
+            -ArgumentList "/quiet Include_debug=1 Include_dev=1 Include_lib=1 Include_pip=1 PrependPath=0 InstallAllUsers=0" `
+            -Wait
+
+          $root = "C:\Users\runneradmin\AppData\Local\Programs\Python\Python$short"
+
+          Add-Content $env:GITHUB_PATH "$root"
+          Add-Content $env:GITHUB_PATH "$root\Scripts"
+
+          echo "PYTHON_ROOT=$root" >> $env:GITHUB_ENV
+
+      # ------------------------
+      # Install numpy
+      # ------------------------
+      - name: Install numpy
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install numpy
+
+      # ------------------------
+      # Install Essentia dependencies
+      # ------------------------
+      - name: Install dependencies
+        run: |
+          .\packaging\build-dependencies-msvc.bat --static --build-type Release
+
+      # ------------------------
+      # Install FFTW + Eigen via vcpkg
+      # ------------------------
+      - name: Install FFTW and Eigen
+        shell: pwsh
+        run: |
+          git clone https://github.com/microsoft/vcpkg.git
+          .\vcpkg\bootstrap-vcpkg.bat
+          .\vcpkg\vcpkg install fftw3:x64-windows eigen3:x64-windows
+
+      # ------------------------
+      # Download FFmpeg DLLs
+      # ------------------------
+      - name: Download FFmpeg
+        shell: pwsh
+        run: |
+          $ffmpegZip = "ffmpeg-release-essentials.zip"
+          Invoke-WebRequest -Uri "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip" -OutFile $ffmpegZip
+          Expand-Archive $ffmpegZip -DestinationPath ffmpeg
+          Get-ChildItem -Directory ffmpeg | ForEach-Object { Get-ChildItem $_.FullName | Move-Item -Destination ffmpeg -Force }
+
+      # ------------------------
+      # Configure CMake
+      # ------------------------
+      - name: Configure
+        run: |
+          cmake -B build ^
+            -DUSE_TENSORFLOW=ON ^
+            -DBUILD_PYTHON_BINDINGS=ON ^
+            -DPython3_ROOT_DIR=%PYTHON_ROOT% ^
+            -DENABLE_STATIC_DEPENDENCIES=ON ^
+            -DCMAKE_PREFIX_PATH=%CD%\packaging\msvc ^
+            -DFFTW_ROOT=%CD%\vcpkg\installed\x64-windows ^
+            -DEigen3_DIR=%CD%\vcpkg\installed\x64-windows/share/eigen3/cmake
+
+      # ------------------------
+      # Build
+      # ------------------------
+      - name: Build
+        run: |
+          set PATH=%PATH%;%CD%\packaging\msvc\bin
+          cmake --build build --config %BUILD_TYPE% --parallel
+
+      # ------------------------
+      # Test
+      # ------------------------
+      - name: Test
+        run: |
+          set PATH=%PATH%;%CD%\packaging\msvc\bin
+          ctest --test-dir build --output-on-failure -C %BUILD_TYPE%
+
+
+      # ------------------------
+      # Prepare Python package (FIXED)
+      # ------------------------
+      - name: Prepare Python package
+        shell: pwsh
+        run: |
+          # Ensure python package root exists
+          if (-not (Test-Path src\python)) {
+            Write-Error "src/python not found"
+            exit 1
+          }
+      
+          # Verify essentia python sources exist
+          if (-not (Test-Path src\python\essentia\standard.py)) {
+            Write-Error "Essentia Python sources missing"
+            exit 1
+          }
+      
+          # setup.py (binary wheel)
+          $lines = @(
+              "from setuptools import setup, find_packages",
+              "from setuptools.dist import Distribution",
+              "",
+              "class BinaryDistribution(Distribution):",
+              "    def has_ext_modules(self):",
+              "        return True",
+              "",
+              "setup(",
+              "    name='essentia',",
+              "    version='2.1b6.dev0',",
+              "    packages=find_packages(),",
+              "    package_data={'essentia': ['*.pyd','*.dll']},",
+              "    include_package_data=True,",
+              "    distclass=BinaryDistribution,",
+              ")"
+          )
+          $lines | Set-Content src\python\setup.py
+        
+      # ------------------------
+      # Copy .pyd + DLLs (including all build/bin DLLs)
+      # ------------------------
+      - name: Copy Python extension and all DLLs
+        shell: pwsh
+        run: |
+          $pyd = Get-ChildItem -Recurse build -Filter "*.pyd" | Select-Object -First 1
+          if (-not $pyd) { Write-Error "No .pyd found"; exit 1 }
+          Copy-Item $pyd.FullName src\python\essentia\
+
+          # Copy vcpkg DLLs (FFTW)
+          Copy-Item vcpkg\installed\x64-windows\bin\*.dll src\python\essentia\
+
+          # Copy FFmpeg DLLs
+          Copy-Item ffmpeg\bin\*.dll src\python\essentia\
+
+          # Copy packaging/msvc DLLs (TensorFlow etc.)
+          Copy-Item packaging\msvc\bin\*.dll src\python\essentia\
+
+      # ------------------------
+      # Copy Python extension and DLLs
+      # ------------------------
+      - name: Copy Python extension and DLLs
+        shell: pwsh
+        run: |
+          $pkg = "src\python\essentia"
+      
+          $pyd = Get-ChildItem -Recurse build -Filter "*_essentia*.pyd" | Select-Object -First 1
+          if (-not $pyd) { Write-Error "No _essentia.pyd found"; exit 1 }
+      
+          Copy-Item $pyd.FullName $pkg -Force
+      
+          Copy-Item packaging\msvc\bin\*.dll $pkg -Force
+          Copy-Item vcpkg\installed\x64-windows\bin\*.dll $pkg -Force
+          Copy-Item ffmpeg\bin\*.dll $pkg -Force
+
+
+      # ------------------------
+      # Patch DLL loading (SAFE)
+      # ------------------------
+      - name: Patch DLL loading
+        shell: pwsh
+        run: |
+          $init = "src\python\essentia\__init__.py"
+      
+          if (-not (Select-String -Path $init -Pattern "add_dll_directory" -Quiet)) {
+            Add-Content $init ""
+            Add-Content $init "import os, sys"
+            Add-Content $init "from pathlib import Path"
+            Add-Content $init "if sys.platform == 'win32':"
+            Add-Content $init "    os.add_dll_directory(str(Path(__file__).parent))"
+          }
+
+      # ------------------------
+      # Patch __str__ bug in Python bindings
+      # ------------------------
+      - name: Patch Essentia __str__ bug
+        shell: pwsh
+        run: |
+          $files = @(
+            "src\python\essentia\standard.py",
+            "src\python\essentia\streaming.py"
+          )
+
+          foreach ($file in $files) {
+            if (Test-Path $file) {
+              $content = Get-Content $file -Raw
+              $content = $content -replace `
+                "def __str__\(self\):\s*\n\s*return __doc__", `
+                "def __str__(self):`n        return __doc__ or ('<Essentia Algorithm: %s>' % self.name())"
+              Set-Content $file $content
+            }
+          }
+
+      # ------------------------
+      # Build Python wheel
+      # ------------------------
+      - name: Build wheel
+        shell: pwsh
+        run: |
+          cd src\python
+          python -m pip install --upgrade setuptools wheel
+          python setup.py bdist_wheel
+
+
+      # ------------------------
+      # Upload wheel
+      # ------------------------
+      - name: Upload wheel
+        uses: actions/upload-artifact@v4
+        with:
+          name: essentia-win-cp${{ matrix.python }}
+          path: src\python\dist/*.whl
