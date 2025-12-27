@@ -69,7 +69,7 @@ jobs:
       # ------------------------
       - name: Install dependencies
         run: |
-          .\packaging\build-dependencies-msvc.bat --static --build-type Release
+          .\packaging\build-dependencies-msvc.bat --static --with-tensorflow --build-type Release
 
       # ------------------------
       # Install FFTW + Eigen via vcpkg
