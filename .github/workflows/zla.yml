@@ -215,6 +215,27 @@ jobs:
           }
 
       # ------------------------
+      # Patch __str__ bug in Python bindings
+      # ------------------------
+      - name: Patch Essentia __str__ bug
+        shell: pwsh
+        run: |
+          $files = @(
+            "src\python\essentia\standard.py",
+            "src\python\essentia\streaming.py"
+          )
+
+          foreach ($file in $files) {
+            if (Test-Path $file) {
+              (Get-Content $file) `
+                -replace 'def __str__\(self\):\s*\n\s*return __doc__',
+                         'def __str__(self):`n        return __doc__ or f"<Essentia Algorithm: {self.name()}>"' `
+                | Set-Content $file
+            }
+          }
+
+
+      # ------------------------
       # Build Python wheel
       # ------------------------
       - name: Build wheel
