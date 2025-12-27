@@ -214,6 +214,7 @@ jobs:
             Add-Content $init "    os.add_dll_directory(str(Path(__file__).parent))"
           }
 
+
       # ------------------------
       # Patch __str__ bug in Python bindings
       # ------------------------
@@ -234,6 +235,7 @@ jobs:
               Set-Content $file $content
             }
           }
+
 
       # ------------------------
       # Build Python wheel
