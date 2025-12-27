@@ -214,9 +214,8 @@ jobs:
             Add-Content $init "    os.add_dll_directory(str(Path(__file__).parent))"
           }
 
-
       # ------------------------
-      # Patch __str__ bug in Python bindings
+      # Patch Essentia __str__ bug (safe indentation)
       # ------------------------
       - name: Patch Essentia __str__ bug
         shell: pwsh
@@ -229,13 +228,15 @@ jobs:
           foreach ($file in $files) {
             if (Test-Path $file) {
               $content = Get-Content $file -Raw
+
+              # Replace ONLY the return line, keep function indentation intact
               $content = $content -replace `
-                "def __str__\(self\):\s*\n\s*return __doc__", `
-                "def __str__(self):`n        return __doc__ or ('<Essentia Algorithm: %s>' % self.name())"
+                "return __doc__", `
+                "return __doc__ or ('<Essentia Algorithm: %s>' % self.name())"
+
               Set-Content $file $content
             }
           }
-
 
       # ------------------------
       # Build Python wheel
