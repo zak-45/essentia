@@ -221,8 +221,7 @@ jobs:
         shell: pwsh
         run: |
           $files = @(
-            "src\python\essentia\standard.py",
-            "src\python\essentia\streaming.py"
+            "src\python\essentia\standard.py
           )
 
           foreach ($file in $files) {
