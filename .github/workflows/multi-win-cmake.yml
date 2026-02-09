@@ -15,6 +15,7 @@ jobs:
       fail-fast: false
       matrix:
         python:
+          - "3.10.19"
           - "3.11.9"
           - "3.12.3"
           - "3.13.3"
